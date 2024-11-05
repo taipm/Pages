@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Top Buy/Sell Ratio Stocks</title>
+    <!-- Thêm Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Thêm Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 0;
+        }
+        h2 {
+            margin-top: 20px;
+            text-align: center;
+            color: #333;
+        }
+        .container {
+            margin-top: 20px;
+        }
+        .loading {
+            text-align: center;
+            color: #999;
+            font-style: italic;
+            margin-top: 20px;
+        }
+        .table-hover tbody tr:hover {
+            background-color: #f1f1f1;
+        }
+        .chart-container {
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Top Buy/Sell Ratio Stocks</h2>
+    
+    <!-- Bộ chọn ngày -->
+    <div class="input-group mb-3" id="datePicker">
+        <span class="input-group-text">Chọn ngày:</span>
+        <input type="date" class="form-control" id="dateInput">
+        <button class="btn btn-primary" type="button" id="dateButton">Xem dữ liệu</button>
+    </div>
+
+    <div id="loading" class="loading">Đang tải dữ liệu...</div>
+    
+    <!-- Thanh tìm kiếm -->
+    <div class="input-group mb-3" style="display:none;" id="searchBar">
+        <input type="text" class="form-control" placeholder="Tìm kiếm mã cổ phiếu" id="searchInput">
+        <button class="btn btn-outline-secondary" type="button" id="searchButton">Tìm kiếm</button>
+    </div>
+    
+    <!-- Bảng dữ liệu -->
+    <table id="stockTable" class="table table-striped table-bordered table-hover" style="display:none;">
+        <thead class="table-dark">
+            <tr>
+                <th scope="col">#</th>
+                <th scope="col">Mã CP</th>
+                <th scope="col">Khối lượng mua</th>
+                <th scope="col">Khối lượng bán</th>
+                <th scope="col">Tổng giá trị</th>
+                <th scope="col">Tỷ lệ Mua/Bán</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+            <!-- Dữ liệu sẽ được thêm vào đây bởi JavaScript -->
+        </tbody>
+    </table>
+
+    <!-- Biểu đồ -->
+    <div class="chart-container" style="display:none;">
+        <canvas id="stockChart"></canvas>
+    </div>
+</div>
+
+<!-- Thêm Bootstrap JS và Popper.js -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    let socket;
+    let stockData = [];
+    let stockChart; // Khai báo biến để lưu trữ biểu đồ
+
+    // Lấy ngày hiện tại ở định dạng YYYY-MM-DD
+    const today = new Date().toISOString().split('T')[0];
+    const dateInput = document.getElementById("dateInput");
+    dateInput.value = today; // Đặt giá trị mặc định cho input date
+
+    // Hàm kết nối WebSocket với ngày được chọn
+    function connectWebSocket(dateStr) {
+        // Nếu đã có kết nối WebSocket trước đó, đóng nó
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.close();
+        }
+
+        // Hiển thị thông báo loading và ẩn các phần tử khác
+        const loading = document.getElementById("loading");
+        const table = document.getElementById("stockTable");
+        const searchBar = document.getElementById("searchBar");
+        const chartContainer = document.querySelector('.chart-container');
+
+        loading.style.display = "block";
+        loading.innerText = "Đang tải dữ liệu...";
+        table.style.display = "none";
+        searchBar.style.display = "none";
+        chartContainer.style.display = "none";
+
+        // Kết nối tới WebSocket server với ngày được chọn
+        socket = new WebSocket(`ws://intraday_socket.microtrade.club/ws_top_buy_sell_ratio/${dateStr}`);
+
+        // Khi kết nối WebSocket được mở
+        socket.onopen = () => {
+            console.log("Đã kết nối tới WebSocket server cho ngày:", dateStr);
+        };
+
+        // Khi nhận được dữ liệu từ WebSocket server
+        socket.onmessage = (event) => {
+            const response = JSON.parse(event.data);
+            const data = response.data;
+            console.log("Nhận được dữ liệu:", data);
+
+            // Ẩn thông báo loading và hiển thị bảng, thanh tìm kiếm
+            loading.style.display = "none";
+            table.style.display = "table";
+            searchBar.style.display = "flex";
+
+            // Lưu trữ dữ liệu để sử dụng cho tìm kiếm và biểu đồ
+            stockData = data;
+
+            // Hiển thị dữ liệu
+            displayData(stockData);
+            updateChart(stockData);
+        };
+
+        // Xử lý khi kết nối WebSocket bị đóng
+        socket.onclose = (event) => {
+            console.log("Đã ngắt kết nối với WebSocket server", event);
+            if (event.code !== 1000) { // Nếu không phải đóng bình thường
+                const loading = document.getElementById("loading");
+                loading.style.display = "block";
+                loading.innerText = "Kết nối đã đóng. Vui lòng thử lại.";
+            }
+        };
+
+        // Xử lý lỗi kết nối WebSocket
+        socket.onerror = (error) => {
+            console.error("Lỗi WebSocket:", error);
+            const loading = document.getElementById("loading");
+            loading.style.display = "block";
+            loading.innerText = "Đã xảy ra lỗi. Vui lòng thử lại sau.";
+        };
+    }
+
+    // Gọi hàm kết nối WebSocket với ngày hiện tại khi tải trang
+    connectWebSocket(today);
+
+    // Xử lý khi người dùng nhấn nút "Xem dữ liệu"
+    const dateButton = document.getElementById("dateButton");
+    dateButton.addEventListener("click", () => {
+        const selectedDate = dateInput.value;
+        if (selectedDate) {
+            connectWebSocket(selectedDate);
+        }
+    });
+
+    // Hàm hiển thị dữ liệu trong bảng
+    function displayData(data) {
+        const tableBody = document.getElementById("tableBody");
+        tableBody.innerHTML = "";
+
+        data.forEach((item, index) => {
+            const row = document.createElement("tr");
+
+            // Liên kết tới trang chi tiết cho mỗi mã cổ phiếu
+            const link = `https://fireant.vn/top-symbols/content/symbols/${item._id}`;
+            row.innerHTML = `
+                <th scope="row">${index + 1}</th>
+                <td><a href="${link}" target="_blank">${item._id}</a></td>
+                <td>${Number(item.buy_vol).toLocaleString()}</td>
+                <td>${Number(item.sell_vol).toLocaleString()}</td>
+                <td>${Number(item.total_value).toLocaleString()}</td>
+                <td>${Number(item.rate_buy_sell).toFixed(2)}</td>
+            `;
+            
+            tableBody.appendChild(row);
+        });
+    }
+
+    // Xử lý tìm kiếm
+    const searchInput = document.getElementById("searchInput");
+    const searchButton = document.getElementById("searchButton");
+
+    searchButton.addEventListener("click", () => {
+        const query = searchInput.value.trim().toUpperCase();
+        const filteredData = stockData.filter(item => item._id.includes(query));
+        displayData(filteredData);
+        updateChart(filteredData);
+    });
+
+    searchInput.addEventListener("keyup", (event) => {
+        if (event.key === "Enter") {
+            searchButton.click();
+        }
+    });
+
+    // Hàm cập nhật biểu đồ
+    function updateChart(data) {
+        const chartContainer = document.querySelector('.chart-container');
+        chartContainer.style.display = "block";
+
+        const ctx = document.getElementById('stockChart').getContext('2d');
+        
+        const labels = data.map(item => item._id);
+        const buyVolumes = data.map(item => item.buy_vol);
+        const sellVolumes = data.map(item => item.sell_vol);
+
+        if (stockChart) {
+            stockChart.destroy(); // Hủy biểu đồ cũ nếu tồn tại
+        }
+
+        stockChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Khối lượng mua',
+                        data: buyVolumes,
+                        backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Khối lượng bán',
+                        data: sellVolumes,
+                        backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                        borderColor: 'rgba(255,99,132,1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return value.toLocaleString();
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y.toLocaleString();
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
